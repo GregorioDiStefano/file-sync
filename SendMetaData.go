@@ -12,6 +12,7 @@ func (br BinaryRequest) sendFileInfo(filenameMapping Files) bool {
 		return false
 	}
 	log.Debug("Sending FileInfo JSON: ", string(data))
-	br.sendData(data, JSON)
+	br.sendData(data, JSON_FILES, 0x00)
+
 	return true
 }

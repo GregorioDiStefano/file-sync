@@ -6,9 +6,13 @@ import json
 import hashlib
 import threading
 import sys
+import binascii
 
-DEBUG = True
-JSON = 0x00
+DEBUG = False
+COMPRESSED = 1 << 0
+JSON_SERVER = 1 << 1
+FILE_PAYLOAD = 1 << 3
+EOF = 1 << 7
 output_folder = "output/"
 
 
@@ -25,9 +29,10 @@ class LocalData(object):
             expected_fn = self.sending_json["FilePath"][f]["FileName"]
             expected_sz = self.sending_json["FilePath"][f]["FileSize"]
             expected_fn = output_folder + expected_fn
+            print "Checking hash of: %s" % (expected_fn)
             if os.path.exists(expected_fn):
                 size = os.stat(expected_fn).st_size
-                if size < expected_sz:
+                if size < expected_sz and size > hash_sample_size:
                     print "File: %s exists, but seems incomplete." % (expected_fn)
                     self.existing_files.append({"FileName": expected_fn,
                                                 "FileSize": size,
@@ -37,17 +42,17 @@ class LocalData(object):
                                                         expected_fn,
                                                         last_bytes=hash_sample_size)
                                                 })
-                else:
+
+                elif size == expected_sz:
                     print "File already exists and seems complete."
+                    self.existing_files.append({"FileName": expected_fn,
+                                                "Status": "complete"})
             else:
                     print expected_fn, " file not found locally."
             print self.existing_files
 
     def get_json(self):
-        if self.existing_files:
             return json.dumps(self.existing_files)
-        else:
-            print "No existing files info set.."
 
 class MD5Check(object):
     @staticmethod
@@ -55,13 +60,18 @@ class MD5Check(object):
         filename = filename
         hash_md5 = hashlib.md5()
 
+        print "Checking file: ", filename
         with open(filename, "rb") as f:
             if last_bytes:
                 fs = os.stat(filename).st_size
                 f.seek(fs - last_bytes)
                 print "Reading hash at position: ", f.tell()
-            for chunk in iter(lambda: f.read(4096), b""):
-                hash_md5.update(chunk)
+            while True:
+                chunk = f.read(128 * 128)
+                if len(chunk):
+                    hash_md5.update(chunk)
+                else:
+                    break
             return hash_md5.hexdigest()
 
     @staticmethod
@@ -72,6 +82,7 @@ class MD5Check(object):
 class ResponseParser(object):
     ld = LocalData()
 
+    seen_files = []
     speed_thread = None
     last_size = 0
     length_left = False
@@ -94,20 +105,28 @@ class ResponseParser(object):
         self.last_size = self.fh.tell()
 
     def new_file(self, filename):
-        if self.fh and not self.fh.closed:
-            self.fh.close()
-
         fixed_filename = str(output_folder + filename)
+
+        dir_to_make = '/'.join(fixed_filename.split("/")[0:-1])
+        if not os.path.exists(dir_to_make):
+            os.makedirs(dir_to_make)
 
         if os.path.exists(fixed_filename):
             os.remove(fixed_filename)
 
-        self.speed_thread and self.speed_thread.stop()
+        self.speed_thread and self.speed_thread.cancel()
         self.fh = open(fixed_filename, "a")
         self.print_speed()
 
     def set_metadata_json(self):
+        print "JSON processed."
         self.metadata_json = json.loads(lz4.loads(self.metadata_json))
+            # metadata (JSON) is read now, we are about to get the
+            # first file.
+        self.ld.check(self.metadata_json)
+        existing_files_info = self.ld.get_json()
+        self.connection.send_data(existing_files_info)
+        self.buf = self.buf[9:]
 
     def key_to_filename(self, key):
         key = str(key)
@@ -117,41 +136,45 @@ class ResponseParser(object):
         key = str(key)
         return self.metadata_json["FilePath"][key]["FileHash"]
 
+    def key_to_size(self, key):
+        key = str(key)
+        return self.metadata_json["FilePath"][key]["FileSize"]
+
+    def check_if_complete(self):
+        return self.fh.tell() == self.key_to_size(self.current_key)
+
+    def process_complete_file(self):
+        self.fh.close()
+        self.speed_thread and self.speed_thread.cancel()
+        MD5Check.equal(output_folder + self.key_to_filename(self.current_key),
+                       self.key_to_hash(self.current_key))
+
     def read_headers(self, data):
-            if self.length_left > 0:
+            if self.length_left > 0 or len(data) < 9:
                 return False
 
-            compressed = int(hexlify(data[0:1]), 16)
+            meta = int(hexlify(data[0:1]), 16)
             key = int(hexlify(data[1:5]), 16)
             length = int(hexlify(data[5:9]), 16)
-
-            # metadata (JSON) is read now, we are about to get the
-            # first file.
-            if key == 1 and self.current_key == JSON:
-                self.set_metadata_json()
-                self.ld.check(self.metadata_json)
-                existing_files_info = self.ld.get_json()
-                self.connection.send_data(existing_files_info)
-                sys.exit(1)
-
-            if key != self.current_key and key > JSON:
-                if key == self.current_key:
-
-                    self.speed_thread and self.speed_thread.stop()
-                    MD5Check.equal(output_folder + self.key_to_filename(key),
-                                   self.key_to_hash(key))
-
-                self.new_file(self.key_to_filename(key))
-                print "new file: ", self.key_to_filename(key)
-
-            self.current_key = key
+            compressed = meta & COMPRESSED
 
             if DEBUG:
                 print "data len: ", len(data), \
-                      " data: ", hexlify(data[0: 10]), \
+                      " data: ", hexlify(data[0: 32]), \
+                      " meta: ", meta, \
                       " compressed: ", compressed, \
+                      " file payload: ", meta & FILE_PAYLOAD, \
                       " key: ", key, \
                       " len: ", length
+
+            if meta & FILE_PAYLOAD and \
+                self.key_to_filename(key) not in self.seen_files:
+                        self.new_file(self.key_to_filename(key))
+                        self.seen_files.append(self.key_to_filename(key))
+                        print "new file: ", self.key_to_filename(key)
+
+            self.current_key = key
+            self.current_meta = meta
 
             self.length_left = length
             self.process_data(compressed, data[9:])
@@ -162,14 +185,23 @@ class ResponseParser(object):
                 self.length_left = False
                 self.buf = data[tmp:]
 
-                if self.current_key == JSON:
+                if self.current_meta & JSON_SERVER:
                     self.metadata_json += data[0:tmp]
-
-                elif compressed:
-                    self.fh.write(bytearray(lz4.loads(data[0:tmp])))
+                    self.set_metadata_json()
                 else:
-                    self.fh.write(bytearray(data[0:tmp]))
+                    if compressed:
+                        self.fh.write(bytearray(lz4.loads(data[0:tmp])))
+                    else:
+                        self.fh.write(bytearray(data[0:tmp]))
+
+                    if self.check_if_complete():
+                        self.process_complete_file()
+
+                #TODO: this is wrong
+                #if len(self.buf) >= 9:
+                    self.read_headers(self.buf)
         else:
+            print "Not enough data.."
             self.length_left = False
 
     def check(self):
@@ -179,6 +211,7 @@ class ResponseParser(object):
 class Connection(object):
     rp = None
     s = socket.socket()
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     connection = None
     port = 8081
     s.bind(("0.0.0.0", port))
@@ -196,7 +229,7 @@ class Connection(object):
 
     def read_data(self):
         while True:
-            data = self.connection.recv(1024 * 1024 * 10)
+            data = self.connection.recv(10 * 1024 * 1024)
 
             if data:
                 self.rp.buf += data
@@ -207,12 +240,18 @@ class Connection(object):
         if len(self.rp.buf):
             self.rp.read_headers(self.rp.buf)
 
-        self.rp.speed_thread.cancel()
+        if self.rp.speed_thread:
+            self.rp.speed_thread.cancel()
         sys.exit(0)
 
     def send_data(self, payload):
-        self.connection.send(payload)
-        print "Sent: ", payload
+        def prepare_payload(self):
+            prefix = "%02x%08x%08x" % (FILE_PAYLOAD, 0x00, len(payload))
+            return binascii.a2b_hex(prefix) + payload
+
+        if payload:
+            self.connection.sendall(prepare_payload(payload))
+            print "Sent: ", prepare_payload(payload)
 
 c = Connection()
 c.wait_for_connection()

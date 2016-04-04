@@ -2,16 +2,15 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"math/rand"
-	"strings"
 	"testing"
 )
 
-func RandomKey() int32 {
-	return rand.Int31()
+func RandomKey() uint32 {
+	return rand.Uint32()
 }
 
+/*
 func TestPayload(t *testing.T) {
 	br := BinaryRequest{dst: "127.0.0.1"}
 	br.sendData([]byte(strings.Repeat("abc", 100)), RandomKey())
@@ -27,7 +26,7 @@ func TestSendFileWithRandom(t *testing.T) {
 	fmt.Println("Random key: ", key)
 	br.sendFile("tests/15_bytes", key)
 }
-
+*/
 func TestSendFile(t *testing.T) {
 	isTesting = true
 	br := BinaryRequest{dst: "127.0.0.1"}

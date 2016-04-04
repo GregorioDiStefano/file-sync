@@ -3,8 +3,9 @@ package main
 import (
 	"encoding/hex"
 	"fmt"
-	"github.com/bkaradzic/go-lz4"
 	"os"
+
+	"github.com/bkaradzic/go-lz4"
 )
 
 type BinaryRequest struct {
@@ -12,15 +13,18 @@ type BinaryRequest struct {
 }
 
 const (
-	MAX_CHUNK = 1024 * 1024 * 3
-	JSON      = 0
+	MAX_CHUNK        = 1024 * 1024 * 3
+	COMPRESSED       = 1 << 0 //sent from server
+	JSON_FILES       = 1 << 1
+	JSON_LOCAL_FILES = 1 << 2 //sent from client
+	FILE_PAYLOAD     = 1 << 3
 )
 
-func (br BinaryRequest) sendFile(filename string, key int32) bool {
+func (br BinaryRequest) sendFile(filename string, key uint32) bool {
 	f, err := os.Open(filename)
 
 	if err != nil {
-		fmt.Errorf("Error reading file: ", filename)
+		log.Fatalf("Error reading file: %s", filename)
 		return false
 	}
 
@@ -34,33 +38,33 @@ func (br BinaryRequest) sendFile(filename string, key int32) bool {
 	for i = 0; i < totalChunks; i++ {
 		buffer := make([]byte, MAX_CHUNK)
 		f.ReadAt(buffer, i*MAX_CHUNK)
-		br.sendData(buffer, key)
+		br.sendData(buffer, FILE_PAYLOAD, key)
 	}
 
 	if lastPacket > 0 {
 		buffer := make([]byte, lastPacket)
 		f.ReadAt(buffer, i*MAX_CHUNK)
-		br.sendData(buffer, key)
+		br.sendData(buffer, FILE_PAYLOAD, key)
 	}
 
 	return true
 }
 
-func preparePayload(compressed bool, key int32, data []byte) []byte {
+func preparePayload(meta uint8, key uint32, data []byte) []byte {
 	prefix := ""
 
-	if compressed {
+	if meta&COMPRESSED == 1 {
 		fmt.Println("This chunk is compressed.")
-		prefix = fmt.Sprintf("%02x%08x%08x", 1, key, len(data))
+		prefix = fmt.Sprintf("%02x%08x%08x", meta, key, len(data))
 	} else {
-		prefix = fmt.Sprintf("%02x%08x%08x", 0, key, len(data))
+		prefix = fmt.Sprintf("%02x%08x%08x", meta, key, len(data))
 	}
 
 	dataStr := prefix + hex.EncodeToString(data)
 	dataBytes, _ := hex.DecodeString(dataStr)
 
-	log.Debug("Prefix: %s", []byte(prefix))
-	log.Debug("Payload: %d", len(dataBytes))
+	log.Debugf("Prefix: %s", []byte(prefix))
+	log.Debugf("Payload: %d", len(dataBytes))
 
 	return dataBytes
 }
@@ -81,20 +85,21 @@ func isCompressible(chunk []byte) bool {
 	return false
 }
 
-func (br BinaryRequest) sendData(payload []byte, key int32) []byte {
+func (br BinaryRequest) sendData(payload []byte, meta uint8, key uint32) []byte {
 	var finalPayload []byte
 
-	if key == JSON || isCompressible(payload) {
+	if meta == JSON_FILES || isCompressible(payload) {
+		meta |= COMPRESSED
 		finalPayload, _ = lz4.Encode(nil, payload)
 
-		fmt.Printf("original: %d compressed: %d, ratio: %f\n",
+		fmt.Printf("original: %d meta: %b, ratio: %f\n",
 			len(payload),
 			len(finalPayload),
 			float32(len(finalPayload))/float32(len(payload))*100)
 
-		finalPayload = preparePayload(true, key, finalPayload)
+		finalPayload = preparePayload(meta, key, finalPayload)
 	} else {
-		finalPayload = preparePayload(false, key, payload)
+		finalPayload = preparePayload(meta, key, payload)
 	}
 	sentToSocket(br.dst, finalPayload)
 	return finalPayload

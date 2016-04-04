@@ -1,12 +1,17 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"net"
 )
 
 var conn net.Conn
 var err error
+
+const (
+	PAYLOAD_PREFIX = 9
+)
 
 func sentToSocket(dst string, data []byte) bool {
 
@@ -17,28 +22,57 @@ func sentToSocket(dst string, data []byte) bool {
 	if err != nil {
 		log.Fatal("Error: ", err)
 		return false
-	} else {
-		log.Debug("Socket opened.")
 	}
 
+	log.Debug("Socket opened.")
 	fmt.Fprintf(conn, "%s", data)
 	return true
 }
 
-func readFromSocket() int {
-	var buf = make([]byte, 1024)
+func readFromSocket() []byte {
+	connbuffer := bufio.NewReader(conn)
+	var buffer []byte
 
 	for {
-		readlen, err := conn.Read(buf)
-		fmt.Println("Reading: ", readlen)
-		if err != nil {
-			log.Fatal("Error when reading from socket: %s\n", err)
-			return 0
+		data := make([]byte, 1024)
+		c, err := connbuffer.Read(data)
+
+		//TODO: this is incorrect
+		if c == 0 && len(buffer) > 0 || err != nil {
+			fmt.Println("break")
+			break
+		} else if c > 0 {
+			fmt.Println(c)
+			buffer = append(buffer, data...)
+			if getCompletePayload(buffer) {
+				log.Infof("Recieved payload: %s", buffer[PAYLOAD_PREFIX:])
+				return buffer
+			}
 		}
-		if readlen == 0 {
-			log.Debug("Connection closed by remote host\n")
-			return 0
-		}
-		fmt.Printf("Client at %s says '%s'\n", conn.RemoteAddr().String(), buf)
+
 	}
+	fmt.Println(buffer)
+	return []byte{}
+}
+
+func getCompletePayload(buffer []byte) bool {
+	if len(buffer) < PAYLOAD_PREFIX {
+		return false
+	}
+
+	var meta byte
+	var key uint32
+	var length uint32
+
+	log.Debugf("Payload prefix: %x\n", buffer[0:PAYLOAD_PREFIX])
+	fmt.Sscanf(fmt.Sprintf("%x", buffer[0:PAYLOAD_PREFIX]),
+		"%02x%08x%08x",
+		&meta,
+		&key,
+		&length)
+
+	if uint32(len(buffer[PAYLOAD_PREFIX:])) >= length {
+		return true
+	}
+	return false
 }
