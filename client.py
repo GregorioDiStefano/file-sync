@@ -124,8 +124,6 @@ class ResponseParser(object):
 
         json_data = json.loads(lz4.loads(data))
         self.metadata_json = JSONParser(json_data)
-        # metadata (JSON) is read now, we are about to get the
-        # first file.
         self.ld.check(self.metadata_json.json_data)
 
     def check_if_complete(self):
@@ -177,7 +175,7 @@ class ResponseParser(object):
 
                 if self.current_meta & JSON_SERVER:
                     self.set_metadata_json(data[0:tmp])
-                    self.connection.send_data(self.ld.get_json())
+                    self.connection.send_data(lz4.compressHC(self.ld.get_json()))
                     self.buf = self.buf[9:]
                 else:
                     if compressed:
@@ -256,7 +254,12 @@ class Connection(object):
         if self.rp.speed_thread:
             self.rp.speed_thread.cancel()
 
+        print len(self.rp.seen_files), len(self.rp.metadata_json.files_to_be_sent())
         assert sorted(self.rp.seen_files) == sorted(self.rp.metadata_json.files_to_be_sent())
+
+        for i in self.rp.seen_files:
+            if i not in self.rp.metadata_json.files_to_be_sent():
+                print i
         sys.exit(0)
 
     def send_data(self, payload):
@@ -266,7 +269,7 @@ class Connection(object):
 
         if payload:
             self.connection.sendall(prepare_payload(payload))
-            print "Sent: ", prepare_payload(payload)
+            #print "Sent: ", prepare_payload(payload)
 
 c = Connection()
 c.wait_for_connection()
