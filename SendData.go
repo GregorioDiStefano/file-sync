@@ -18,6 +18,8 @@ const (
 	JSON_FILES       = 1 << 1
 	JSON_LOCAL_FILES = 1 << 2 //sent from client
 	FILE_PAYLOAD     = 1 << 3
+
+	CHUNK_OVERHEAD = 9
 )
 
 func (br BinaryRequest) sendFile(filename string, key uint32) bool {
@@ -76,7 +78,7 @@ func isCompressible(chunk []byte) bool {
 
 	if end <= len(chunk) {
 		compressed, err := lz4.Encode(nil, chunk[start:end])
-		if len(compressed) < testSize && err == nil {
+		if len(compressed)+CHUNK_OVERHEAD < testSize && err == nil {
 			return true
 		}
 	} else {

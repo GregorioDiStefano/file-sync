@@ -7,6 +7,7 @@ import hashlib
 import threading
 import sys
 import binascii
+import struct
 
 DEBUG = False
 COMPRESSED = 1 << 0
@@ -88,7 +89,7 @@ class ResponseParser(object):
     length_left = False
     current_key = None
     fh = None
-    metadata_json = ""
+    metadata_json = None
     buf = ""
     connection = None
 
@@ -96,10 +97,10 @@ class ResponseParser(object):
         self.connection = connection
 
     def print_speed(self):
-        self.speed_thread = threading.Timer(1.0, self.print_speed)
+        self.speed_thread = threading.Timer(5.0, self.print_speed)
         self.speed_thread.start()
 
-        sys.stdout.write(str((self.fh.tell() - self.last_size) / (1024*1024)) +
+        sys.stdout.write(str((self.fh.tell() - self.last_size)/5.0 / (1024.0*1024.0)) +
                          "mb/sec\r")
         sys.stdout.flush()
         self.last_size = self.fh.tell()
@@ -118,44 +119,32 @@ class ResponseParser(object):
         self.fh = open(fixed_filename, "a")
         self.print_speed()
 
-    def set_metadata_json(self):
+    def set_metadata_json(self, data):
         print "JSON processed."
-        self.metadata_json = json.loads(lz4.loads(self.metadata_json))
-            # metadata (JSON) is read now, we are about to get the
-            # first file.
-        self.ld.check(self.metadata_json)
-        existing_files_info = self.ld.get_json()
-        self.connection.send_data(existing_files_info)
-        self.buf = self.buf[9:]
 
-    def key_to_filename(self, key):
-        key = str(key)
-        return self.metadata_json["FilePath"][key]["FileName"]
-
-    def key_to_hash(self, key):
-        key = str(key)
-        return self.metadata_json["FilePath"][key]["FileHash"]
-
-    def key_to_size(self, key):
-        key = str(key)
-        return self.metadata_json["FilePath"][key]["FileSize"]
+        json_data = json.loads(lz4.loads(data))
+        self.metadata_json = JSONParser(json_data)
+        # metadata (JSON) is read now, we are about to get the
+        # first file.
+        self.ld.check(self.metadata_json.json_data)
 
     def check_if_complete(self):
-        return self.fh.tell() == self.key_to_size(self.current_key)
+        return self.fh.tell() == self.metadata_json.key_to_size(self.current_key)
 
     def process_complete_file(self):
         self.fh.close()
         self.speed_thread and self.speed_thread.cancel()
-        MD5Check.equal(output_folder + self.key_to_filename(self.current_key),
-                       self.key_to_hash(self.current_key))
+        file_to_hash = output_folder + self.metadata_json.key_to_filename(self.current_key)
+        expected_hash = self.metadata_json.key_to_hash(self.current_key)
+        t = threading.Thread(target=MD5Check.equal, args=(file_to_hash,
+                                                          expected_hash))
+        t.start()
 
     def read_headers(self, data):
             if self.length_left > 0 or len(data) < 9:
                 return False
 
-            meta = int(hexlify(data[0:1]), 16)
-            key = int(hexlify(data[1:5]), 16)
-            length = int(hexlify(data[5:9]), 16)
+            meta, key, length = struct.unpack("!bii", data[0:9])
             compressed = meta & COMPRESSED
 
             if DEBUG:
@@ -168,10 +157,11 @@ class ResponseParser(object):
                       " len: ", length
 
             if meta & FILE_PAYLOAD and \
-                self.key_to_filename(key) not in self.seen_files:
-                        self.new_file(self.key_to_filename(key))
-                        self.seen_files.append(self.key_to_filename(key))
-                        print "new file: ", self.key_to_filename(key)
+                self.metadata_json.key_to_filename(key) not in self.seen_files:
+                        fn = self.metadata_json.key_to_filename(key)
+                        self.new_file(fn)
+                        self.seen_files.append(fn)
+                        print "new file: ", fn
 
             self.current_key = key
             self.current_meta = meta
@@ -186,8 +176,9 @@ class ResponseParser(object):
                 self.buf = data[tmp:]
 
                 if self.current_meta & JSON_SERVER:
-                    self.metadata_json += data[0:tmp]
-                    self.set_metadata_json()
+                    self.set_metadata_json(data[0:tmp])
+                    self.connection.send_data(self.ld.get_json())
+                    self.buf = self.buf[9:]
                 else:
                     if compressed:
                         self.fh.write(bytearray(lz4.loads(data[0:tmp])))
@@ -201,12 +192,34 @@ class ResponseParser(object):
                 #if len(self.buf) >= 9:
                     self.read_headers(self.buf)
         else:
-            print "Not enough data.."
             self.length_left = False
 
     def check(self):
         self.read_headers(self.buf)
 
+class JSONParser(object):
+    json_data = ""
+
+    def __init__(self, json):
+            self.json_data = json
+
+    def files_to_be_sent(self):
+        files = []
+        for k in self.json_data["FilePath"].keys():
+            files.append(self.json_data["FilePath"][k]["FileName"])
+        return files
+
+    def key_to_filename(self, key):
+        key = str(key)
+        return self.json_data["FilePath"][key]["FileName"]
+
+    def key_to_hash(self, key):
+        key = str(key)
+        return self.json_data["FilePath"][key]["FileHash"]
+
+    def key_to_size(self, key):
+        key = str(key)
+        return self.json_data["FilePath"][key]["FileSize"]
 
 class Connection(object):
     rp = None
@@ -242,6 +255,8 @@ class Connection(object):
 
         if self.rp.speed_thread:
             self.rp.speed_thread.cancel()
+
+        assert sorted(self.rp.seen_files) == sorted(self.rp.metadata_json.files_to_be_sent())
         sys.exit(0)
 
     def send_data(self, payload):
