@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/md5"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -44,10 +45,10 @@ func CompareDirectories(root string) Files {
 	var count int64 = 1
 	files := Files{FilePath: make(map[string]FileData)}
 	files.RootPath = root
-
+	fmt.Println("files.RootPath: ", root)
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if fileHash, err := ComputeMd5(path, 0); err == nil {
-			files.FilePath[strconv.FormatInt(count, 10)] = FileData{info.Size(), path[len(root):], fileHash}
+			files.FilePath[strconv.FormatInt(count, 10)] = FileData{info.Size(), path, fileHash}
 			count++
 		}
 		return nil

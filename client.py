@@ -29,28 +29,31 @@ class LocalData(object):
         for f in files:
             expected_fn = self.sending_json["FilePath"][f]["FileName"]
             expected_sz = self.sending_json["FilePath"][f]["FileSize"]
+
+            remote_fn = expected_fn
             expected_fn = output_folder + expected_fn
+
             print "Checking hash of: %s" % (expected_fn)
             if os.path.exists(expected_fn):
                 size = os.stat(expected_fn).st_size
                 if size < expected_sz and size > hash_sample_size:
                     print "File: %s exists, but seems incomplete." % (expected_fn)
-                    self.existing_files.append({"FileName": expected_fn,
+                    self.existing_files.append({"FileName": remote_fn,
                                                 "FileSize": size,
                                                 "SampleHashSize": hash_sample_size,
                                                 "SampleFileHash":
                                                     MD5Check.get(
-                                                        expected_fn,
+                                                        remote_fn,
                                                         last_bytes=hash_sample_size)
                                                 })
 
                 elif size == expected_sz:
                     print "File already exists and seems complete."
-                    self.existing_files.append({"FileName": expected_fn,
+                    self.existing_files.append({"FileName": remote_fn,
                                                 "Status": "complete"})
             else:
                     print expected_fn, " file not found locally."
-            print self.existing_files
+            #print self.existing_files
 
     def get_json(self):
             return json.dumps(self.existing_files)
@@ -106,7 +109,7 @@ class ResponseParser(object):
         self.last_size = self.fh.tell()
 
     def new_file(self, filename):
-        fixed_filename = str(output_folder + filename)
+        fixed_filename = (output_folder + filename).encode("utf-8")
 
         dir_to_make = '/'.join(fixed_filename.split("/")[0:-1])
         if not os.path.exists(dir_to_make):
@@ -175,7 +178,7 @@ class ResponseParser(object):
 
                 if self.current_meta & JSON_SERVER:
                     self.set_metadata_json(data[0:tmp])
-                    self.connection.send_data(lz4.compressHC(self.ld.get_json()))
+                    self.connection.send_data((self.ld.get_json()))
                     self.buf = self.buf[9:]
                 else:
                     if compressed:
@@ -257,9 +260,6 @@ class Connection(object):
         print len(self.rp.seen_files), len(self.rp.metadata_json.files_to_be_sent())
         assert sorted(self.rp.seen_files) == sorted(self.rp.metadata_json.files_to_be_sent())
 
-        for i in self.rp.seen_files:
-            if i not in self.rp.metadata_json.files_to_be_sent():
-                print i
         sys.exit(0)
 
     def send_data(self, payload):

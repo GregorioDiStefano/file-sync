@@ -44,9 +44,10 @@ func readFromSocket() []byte {
 		} else if c > 0 {
 			fmt.Println(c)
 			buffer = append(buffer, data...)
-			if getCompletePayload(buffer) {
-				log.Infof("Recieved payload: %s", buffer[PAYLOAD_PREFIX:])
-				return buffer
+			completePayload := getCompletePayload(buffer)
+			if len(completePayload) > 0 {
+				log.Infof("Recieved payload: %s", completePayload)
+				return completePayload
 			}
 		}
 
@@ -55,9 +56,9 @@ func readFromSocket() []byte {
 	return []byte{}
 }
 
-func getCompletePayload(buffer []byte) bool {
+func getCompletePayload(buffer []byte) []byte {
 	if len(buffer) < PAYLOAD_PREFIX {
-		return false
+		return []byte{}
 	}
 
 	var meta byte
@@ -72,7 +73,7 @@ func getCompletePayload(buffer []byte) bool {
 		&length)
 
 	if uint32(len(buffer[PAYLOAD_PREFIX:])) >= length {
-		return true
+		return buffer[PAYLOAD_PREFIX : length+PAYLOAD_PREFIX]
 	}
-	return false
+	return []byte{}
 }
