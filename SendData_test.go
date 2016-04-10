@@ -28,7 +28,7 @@ func TestSendFileWithRandom(t *testing.T) {
 }
 */
 func TestSendFile(t *testing.T) {
-	isTesting = true
+
 	br := BinaryRequest{dst: "127.0.0.1"}
 	br.sendFile("tests/15_bytes", RandomKey())
 	br.sendFile("tests/20_bytes", RandomKey())
@@ -38,7 +38,7 @@ func TestSendFile(t *testing.T) {
 }
 
 func TestSendFileCompressed(t *testing.T) {
-	isTesting = false
+
 	flag.Set("compress", "true")
 	br := BinaryRequest{dst: "127.0.0.1"}
 	br.sendFile("tests/15_bytes", RandomKey())

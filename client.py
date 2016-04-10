@@ -8,6 +8,7 @@ import threading
 import sys
 import binascii
 import struct
+import ujson
 
 DEBUG = False
 COMPRESSED = 1 << 0
@@ -56,7 +57,8 @@ class LocalData(object):
             #print self.existing_files
 
     def get_json(self):
-            return json.dumps(self.existing_files)
+            return ujson.dumps(self.existing_files, ensure_ascii=False,
+                               escape_forward_slashes=False)
 
 class MD5Check(object):
     @staticmethod

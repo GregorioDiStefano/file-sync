@@ -43,37 +43,41 @@ func readFromSocket() []byte {
 			break
 		} else if c > 0 {
 			fmt.Println(c)
-			buffer = append(buffer, data...)
-			completePayload := getCompletePayload(buffer)
-			if len(completePayload) > 0 {
-				log.Infof("Recieved payload: %s", completePayload)
-				return completePayload
+			buffer = append(buffer, data[0:c]...)
+			if getCompletePayload(buffer) {
+				log.Debugf("Recieved payload: %x", buffer[PAYLOAD_PREFIX:])
+				return buffer[PAYLOAD_PREFIX:]
 			}
 		}
 
 	}
-	fmt.Println(buffer)
 	return []byte{}
 }
 
-func getCompletePayload(buffer []byte) []byte {
+func getCompletePayload(buffer []byte) bool {
 	if len(buffer) < PAYLOAD_PREFIX {
-		return []byte{}
+		return false
 	}
 
 	var meta byte
 	var key uint32
 	var length uint32
 
-	log.Debugf("Payload prefix: %x\n", buffer[0:PAYLOAD_PREFIX])
 	fmt.Sscanf(fmt.Sprintf("%x", buffer[0:PAYLOAD_PREFIX]),
 		"%02x%08x%08x",
 		&meta,
 		&key,
 		&length)
 
+	log.Debugf("Payload prefix: %x, meta: %x, key: %x, length: %x\n",
+		buffer[0:PAYLOAD_PREFIX],
+		meta,
+		key,
+		length)
+
 	if uint32(len(buffer[PAYLOAD_PREFIX:])) >= length {
-		return buffer[PAYLOAD_PREFIX : length+PAYLOAD_PREFIX]
+		log.Debugf("Complete payload: %s", buffer[PAYLOAD_PREFIX:])
+		return true
 	}
-	return []byte{}
+	return false
 }

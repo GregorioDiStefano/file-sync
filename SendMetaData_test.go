@@ -8,7 +8,6 @@ import (
 )
 
 func TestMetaDataSending(t *testing.T) {
-	isTesting = false
 
 	flag.Set("compress", "true")
 
